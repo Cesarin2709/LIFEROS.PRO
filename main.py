@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, Depends
+from fastapi import FastAPI, Request, Form, Depends, JSONResponse, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
@@ -9,8 +9,9 @@ import os
 
 app = FastAPI()
 
-# ✅ CAMBIO CLAVE: base de datos en /data para que persista en Fly.io
-DATABASE_URL = "sqlite:////data/lifeos_pro_v1.db"
+# ✅ Funciona en Windows (local) y en Fly.io (producción)
+DB_PATH = "/data/lifeos_pro_v1.db" if os.path.exists("/data") else "./lifeos_pro_v1.db"
+DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -91,8 +92,54 @@ def recommend_habit():
     return random.choice(habits)
 
 # ----------------------
-# HTML TEMPLATE
+# PWA - MANIFEST Y SERVICE WORKER
 # ----------------------
+
+@app.get("/manifest.json")
+def manifest():
+    return JSONResponse({
+        "name": "liferos.pro",
+        "short_name": "Liferos",
+        "description": "Tu app de habitos, finanzas y bienestar",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#111111",
+        "theme_color": "#4CAF50",
+        "orientation": "portrait",
+        "icons": [
+            {
+                "src": "https://via.placeholder.com/192x192/4CAF50/ffffff?text=L",
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any maskable"
+            },
+            {
+                "src": "https://via.placeholder.com/512x512/4CAF50/ffffff?text=L",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any maskable"
+            }
+        ]
+    })
+
+@app.get("/sw.js")
+def service_worker():
+    sw_code = """
+const CACHE_NAME = 'liferos-v1';
+const urlsToCache = ['/'];
+self.addEventListener('install', function(event) {
+    event.waitUntil(caches.open(CACHE_NAME).then(function(cache) {
+        return cache.addAll(urlsToCache);
+    }));
+});
+self.addEventListener('fetch', function(event) {
+    event.respondWith(fetch(event.request).catch(function() {
+        return caches.match(event.request);
+    }));
+});
+"""
+    return Response(content=sw_code, media_type="application/javascript")
+
 
 def dashboard_html(content, request: Request):
     path = request.url.path
@@ -103,7 +150,30 @@ def dashboard_html(content, request: Request):
     <head>
     <title>liferos.pro</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#4CAF50">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.json">
     <script>
+    if ('serviceWorker' in navigator) {{
+        navigator.serviceWorker.register('/sw.js');
+    }}
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {{
+        e.preventDefault();
+        deferredPrompt = e;
+        const btn = document.getElementById('install-btn');
+        if (btn) btn.style.display = 'block';
+    }});
+    function installApp() {{
+        if (deferredPrompt) {{
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(() => {{
+                deferredPrompt = null;
+                document.getElementById('install-btn').style.display = 'none';
+            }});
+        }}
+    }}
     function toggle(id) {{
         var x = document.getElementById(id);
         if (x.style.display === "none") {{
@@ -115,11 +185,16 @@ def dashboard_html(content, request: Request):
     </script>
     <style>
     body {{ margin:0; font-family:Arial; display:flex; }}
-    .sidebar {{ width:220px; background:#111; color:white; height:100vh; padding:20px; }}
+    .sidebar {{ width:220px; background:#111; color:white; height:100vh; padding:20px; overflow-y:auto; }}
     .sidebar a {{ display:block; color:white; padding:10px; text-decoration:none; }}
     .sidebar a:hover {{ background:#333; }}
-    .content {{ flex:1; padding:40px; }}
+    .content {{ flex:1; padding:40px; overflow-y:auto; }}
     input,button {{ padding:10px; margin:5px; }}
+    #install-btn {{
+        display:none; background:#4CAF50; color:white; border:none;
+        padding:10px 15px; border-radius:8px; cursor:pointer;
+        width:100%; margin-top:10px; font-size:0.9em;
+    }}
     @media (max-width: 768px) {{
         body {{ flex-direction: column; }}
         .sidebar {{ width: auto; height: auto; }}
@@ -129,6 +204,7 @@ def dashboard_html(content, request: Request):
     <body>
     <div class="sidebar">
     <h2>liferos.pro</h2>
+    <button id="install-btn" onclick="installApp()">📲 Instalar App</button>
     <a href="/">Inicio</a>
     <a href="/habits">Hábitos</a>
     <div style="display:flex; align-items:center;">
