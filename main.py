@@ -66,6 +66,18 @@ class EmotionalLog(Base):
     reason = Column(String)
     action = Column(String)
 
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+    customer_name = Column(String, nullable=False)
+    product = Column(String, nullable=False)
+    quantity = Column(Integer, default=1)
+    unit_price = Column(Float, nullable=False)
+    total_price = Column(Float, nullable=False)
+    status = Column(String, default="Pendiente")
+    date = Column(String, default="")
+    notes = Column(Text, default="")
+
 Base.metadata.create_all(bind=engine)
 
 # ----------------------
@@ -206,6 +218,7 @@ def dashboard_html(content, request: Request):
     <h2>liferos.pro</h2>
     <button id="install-btn" onclick="installApp()">📲 Instalar App</button>
     <a href="/">Inicio</a>
+    <a href="/orders">📦 Órdenes</a>
     <a href="/habits">Hábitos</a>
     <div style="display:flex; align-items:center;">
         <a href="/finances" style="flex-grow:1;">Finanzas</a>
@@ -564,6 +577,134 @@ def delete_emotional(entry_id: int, db: Session = Depends(get_db)):
         db.delete(entry)
         db.commit()
     return RedirectResponse("/emotional", status_code=303)
+
+# ----------------------
+# ÓRDENES
+# ----------------------
+
+@app.get("/orders", response_class=HTMLResponse)
+def orders(request: Request, db: Session = Depends(get_db)):
+    orders_list = db.query(Order).order_by(Order.date.desc()).all()
+    total_orders = len(orders_list)
+    total_amount = sum(o.total_price for o in orders_list)
+    pending_count = len([o for o in orders_list if o.status == "Pendiente"])
+    completed_count = len([o for o in orders_list if o.status == "Completada"])
+
+    html = """
+    <h1>📦 Gestión de Órdenes</h1>
+    <div style="background:#e3f2fd; padding:15px; border-radius:8px; margin-bottom:20px; border:1px solid #2196F3;">
+        <div style="display:flex; gap:30px; flex-wrap:wrap;">
+            <div><b style="color:#1976D2;">Total Órdenes:</b> {}</div>
+            <div><b style="color:#1976D2;">Monto Total:</b> S/.{:,.2f}</div>
+            <div><b style="color:#FF6F00;">Pendientes:</b> {}</div>
+            <div><b style="color:#388E3C;">Completadas:</b> {}</div>
+        </div>
+    </div>
+    """.format(total_orders, total_amount, pending_count, completed_count)
+
+    html += """
+    <div style="background:#f5f5f5; padding:15px; border-radius:8px; margin-bottom:20px;">
+        <h3 style="margin-top:0;">➕ Nueva Orden</h3>
+        <form method="post" style="display:grid; gap:10px; max-width:600px;">
+            <input name="customer_name" placeholder="Nombre del Cliente" required style="padding:10px; border:1px solid #ddd; border-radius:5px;">
+            <input name="product" placeholder="Producto/Descripción" required style="padding:10px; border:1px solid #ddd; border-radius:5px;">
+            <div style="display:flex; gap:10px;">
+                <input name="quantity" type="number" min="1" value="1" placeholder="Cantidad" required style="padding:10px; border:1px solid #ddd; border-radius:5px; flex:1;">
+                <input name="unit_price" type="number" step="0.01" placeholder="Precio Unitario" required style="padding:10px; border:1px solid #ddd; border-radius:5px; flex:1;">
+            </div>
+            <input name="notes" placeholder="Notas (opcional)" style="padding:10px; border:1px solid #ddd; border-radius:5px;">
+            <button style="background:#4CAF50; color:white; border:none; padding:12px; border-radius:5px; cursor:pointer; font-weight:bold;">Crear Orden</button>
+        </form>
+    </div>
+    """
+
+    if not orders_list:
+        html += "<p style='color:#999; text-align:center; padding:40px;'>No hay órdenes registradas aún.</p>"
+    else:
+        html += "<h3>Órdenes Recientes</h3>"
+        for o in orders_list:
+            status_color = "#FF6F00" if o.status == "Pendiente" else "#388E3C"
+            status_bg = "#FFF3E0" if o.status == "Pendiente" else "#E8F5E9"
+            
+            html += f"""
+            <div style="background:white; border:1px solid #ddd; padding:15px; border-radius:8px; margin-bottom:15px;">
+                <div style="display:flex; justify-content:space-between; align-items:start;">
+                    <div style="flex:1;">
+                        <div style="font-size:1.1em; font-weight:bold; margin-bottom:5px;">
+                            {html_tools.escape(o.product)} <span style="color:#999; font-size:0.9em;">(x{o.quantity})</span>
+                        </div>
+                        <div style="color:#555; font-size:0.95em;">
+                            👤 <b>{html_tools.escape(o.customer_name)}</b>
+                        </div>
+                        <div style="color:#555; font-size:0.95em;">
+                            📅 {o.date}
+                        </div>
+                        {f'<div style="margin-top:5px; color:#555; font-size:0.9em;">📝 {html_tools.escape(o.notes)}</div>' if o.notes else ''}
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:1.3em; font-weight:bold; color:#2E7D32; margin-bottom:10px;">
+                            S/.{o.total_price:,.2f}
+                        </div>
+                        <div style="background:{status_bg}; color:{status_color}; padding:5px 10px; border-radius:5px; font-weight:bold; font-size:0.9em; margin-bottom:10px;">
+                            {o.status}
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex; gap:10px; margin-top:10px; border-top:1px solid #eee; padding-top:10px;">
+                    <form action="/orders/{o.id}/status" method="post" style="margin:0;">
+                        <input type="hidden" name="action" value="complete">
+                        <button title="Marcar como Completada" style="background:#4CAF50; color:white; border:none; padding:8px 12px; border-radius:5px; cursor:pointer;">✅ Completar</button>
+                    </form>
+                    <form action="/orders/{o.id}/delete" method="post" style="margin:0;">
+                        <button title="Eliminar orden" style="background:#f44336; color:white; border:none; padding:8px 12px; border-radius:5px; cursor:pointer;">🗑️ Eliminar</button>
+                    </form>
+                </div>
+            </div>
+            """
+
+    return dashboard_html(html, request=request)
+
+@app.post("/orders")
+def create_order(
+    customer_name: str = Form(...),
+    product: str = Form(...),
+    quantity: int = Form(1),
+    unit_price: float = Form(...),
+    notes: str = Form(default=""),
+    db: Session = Depends(get_db)
+):
+    total_price = quantity * unit_price
+    today = date.today().isoformat()
+    order = Order(
+        customer_name=customer_name,
+        product=product,
+        quantity=quantity,
+        unit_price=unit_price,
+        total_price=total_price,
+        date=today,
+        notes=notes,
+        status="Pendiente"
+    )
+    db.add(order)
+    db.commit()
+    return RedirectResponse("/orders", status_code=303)
+
+@app.post("/orders/{order_id}/status")
+def update_order_status(order_id: int, action: str = Form(...), db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if order:
+        if action == "complete":
+            order.status = "Completada"
+        db.commit()
+    return RedirectResponse("/orders", status_code=303)
+
+@app.post("/orders/{order_id}/delete")
+def delete_order(order_id: int, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if order:
+        db.delete(order)
+        db.commit()
+    return RedirectResponse("/orders", status_code=303)
 
 # ----------------------
 # AI COACH
